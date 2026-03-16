@@ -3,6 +3,7 @@ try:
     import requests
     import base64
     import os
+    import argparse
     from datetime import datetime, timedelta
 except ImportError as e:
     print(f"Missing required dependency: {e}")
@@ -18,6 +19,31 @@ TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
 if not PROJECT_KEY or not TOKEN:
     print("Error: PROJECT_KEY and TOKEN must be configured")
     exit(1)
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
+parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='xlsx',
+                    help='Output format: csv or xlsx (default: xlsx)')
+args = parser.parse_args()
+
+# Function to write data in chunks to CSV
+def write_chunk_to_csv(filename, chunk_data, mode='w'):
+    """
+    Write a chunk of issue data to a CSV file.
+
+    Parameters:
+        filename (str): The path to the output CSV file.
+        chunk_data (list): List of issue dictionaries to write.
+        mode (str): File write mode, 'w' for write (creates new file), 'a' for append.
+
+    Behavior:
+        - Converts chunk_data to a pandas DataFrame.
+        - Writes the DataFrame to the specified CSV file.
+        - If mode is 'w', includes the header; if 'a', omits the header.
+    """
+    df = pd.DataFrame(chunk_data)
+    # For CSV, we can simply append with or without header
+    df.to_csv(filename, index=False, mode=mode, header=(mode == 'w'))
 
 # Function to write data in chunks to Excel
 def write_chunk_to_excel(filename, chunk_data, mode='w'):
@@ -47,10 +73,13 @@ delta = timedelta(days=30)  # Adjust the range to ensure < 10,000 results
 
 current_start_date = start_date
 all_issues = []
-excel_file = 'sonarqube_issues.xlsx'
+output_file = f'sonarqube_issues.{args.format}'
 chunk_size = 5000  # Write to file every 5000 issues
-excel_mode = 'w'  # Start with write mode for the first chunk
+write_mode = 'w'  # Start with write mode for the first chunk
 total_issues_count = 0
+
+# Select the appropriate write function based on format
+write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_excel
 
 while current_start_date < end_date:
     current_end_date = current_start_date + delta
@@ -78,12 +107,12 @@ while current_start_date < end_date:
                     all_issues.extend(issues)
                     total_issues_count += len(issues)
                     
-                    # Write to Excel in chunks to save memory
+                    # Write to file in chunks to save memory
                     if len(all_issues) >= chunk_size:
-                        print(f"Writing chunk of {len(all_issues)} issues to Excel...")
-                        write_chunk_to_excel(excel_file, all_issues, excel_mode)
+                        print(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
+                        write_function(output_file, all_issues, write_mode)
                         all_issues = []  # Clear memory
-                        excel_mode = 'a'  # Switch to append mode after first write
+                        write_mode = 'a'  # Switch to append mode after first write
                     
                     # Check if there are more pages
                     if len(issues) < page_size:
@@ -120,11 +149,11 @@ while current_start_date < end_date:
 
 # Handle any remaining issues
 if all_issues:
-    print(f"Writing final chunk of {len(all_issues)} issues to Excel...")
-    write_chunk_to_excel(excel_file, all_issues, excel_mode)
+    print(f"Writing final chunk of {len(all_issues)} issues to {args.format.upper()}...")
+    write_function(output_file, all_issues, write_mode)
 
 if total_issues_count > 0:
-    print(f'✅ Export completed: {total_issues_count} issues exported to {excel_file}')
+    print(f'✅ Export completed: {total_issues_count} issues exported to {output_file}')
     print(f'📊 Date range: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}')
 else:
     print('No issues found.')

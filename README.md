@@ -1,7 +1,9 @@
 
-# SonarQube to Excel Export
+# SonarQube Issues Export
 
-This Python script fetches issues from a SonarQube project and exports them to an Excel file. It uses the SonarQube REST API and handles pagination and date ranges to ensure all issues are retrieved.
+This Python script fetches issues from a SonarQube project and exports them to CSV or Excel format. It uses the SonarQube REST API and handles pagination, date ranges, and chunked writing to efficiently retrieve and export large numbers of issues.
+
+**Compatible with both local SonarQube instances (localhost:9000) and SonarCloud.**
 
 ## Prerequisites
 
@@ -24,99 +26,126 @@ cd sonarqube-issues-export-to-excel
 pip install requests pandas openpyxl
 ```
 
+## Configuration
+
+Configure the script using environment variables. The script works with both local SonarQube instances and SonarCloud.
+
+### For Local SonarQube Instance (default)
+
+```bash
+export SONAR_URL='http://localhost:9000/api/issues/search'   # Local SonarQube instance
+export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
+export SONAR_TOKEN='your-authentication-token'               # Your authentication token
+```
+
+### For SonarCloud
+
+```bash
+export SONAR_URL='https://sonarcloud.io/api/issues/search'   # SonarCloud instance
+export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
+export SONAR_TOKEN='your-authentication-token'               # Your authentication token
+```
+
+Alternatively, you can edit these values directly in the script.
+
 ## Usage
 
-1. Update the `SONARQUBE_URL`, `PROJECT_KEY`, and `TOKEN` variables in the script with your SonarQube instance details.
-
-2. Run the script:
+### Basic Usage (Excel format)
 
 ```bash
 python sonar-export.py
 ```
 
-3. The script will fetch the issues and save them to an Excel file named `sonarqube_issues.xlsx`.
+This will export issues to `sonarqube_issues.xlsx` by default.
 
-## Script Explanation
+### Export to CSV
 
-- The script uses the `requests` library to fetch issues from SonarQube's REST API.
-- It handles pagination to fetch all issues.
-- The issues are stored in a pandas DataFrame and then exported to an Excel file.
+For better cross-platform compatibility, you can export to CSV format:
+
+```bash
+python sonar-export.py --format csv
+```
+
+This will export issues to `sonarqube_issues.csv`.
+
+### Export Options
+
+```bash
+python sonar-export.py --format [csv|xlsx]
+```
+
+- `--format csv`: Export to CSV format (better cross-platform compatibility, smaller file size)
+- `--format xlsx`: Export to Excel format (default, better for viewing in spreadsheet applications)
+
+## Features
+
+- **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
+- **Chunked Writing**: Writes data in chunks (every 5000 issues) to minimize memory usage for large exports
+- **Date Range Handling**: Automatically splits requests into date ranges to handle SonarQube's 10,000 result limit
+- **Pagination Support**: Handles pagination to fetch all issues within each date range
+- **Comprehensive Error Handling**: Includes specific error messages for common issues:
+  - Authentication failures (401)
+  - Project not found (404)
+  - Access denied (403)
+  - Connection timeouts
+  - Network errors
+- **Environment Variable Support**: Configure via environment variables for better security
+- **Progress Reporting**: Shows real-time progress during export
 
 ## Example
 
-Here is an example of how to use the script:
+Complete workflow example:
 
-```python
-import pandas as pd
-import requests
-import base64
-from datetime import datetime, timedelta
+### Using Local SonarQube Instance
 
-# SonarQube parameters
-SONARQUBE_URL = 'http://localhost:9000/api/issues/search' #Sonar Instance URL
-PROJECT_KEY = '' #Your Project Key
-TOKEN = '' #Your Project Token
+```bash
+# Set up environment variables for local instance
+export SONAR_URL='http://localhost:9000/api/issues/search'
+export SONAR_PROJECT_KEY='my-project'
+export SONAR_TOKEN='your-token-here'
 
-# Fetch issues from SonarQube
-auth = base64.b64encode(f'{TOKEN}:'.encode()).decode()
-headers = {'Authorization': f'Basic {auth}'}
-page_size = 500  # Page size, maximum allowed by SonarQube
+# Export to Excel (default)
+python sonar-export.py
 
-# Adjust date ranges as necessary to ensure each range returns less than 10,000 issues
-start_date = datetime(2000, 1, 1)  # Example start date
-end_date = datetime.now()  # Current date and time
-delta = timedelta(days=30)  # Adjust the range to ensure < 10,000 results
-
-current_start_date = start_date
-all_issues = []
-
-while current_start_date < end_date:
-    current_end_date = current_start_date + delta
-    if current_end_date > end_date:
-        current_end_date = end_date
-
-    params = { #Ajdust as required
-        'componentKeys': PROJECT_KEY,
-        'createdAfter': current_start_date.strftime('%Y-%m-%d'),
-        'createdBefore': current_end_date.strftime('%Y-%m-%d'),
-        'ps': page_size,
-        'p': 1
-    }
-
-    while True:
-        response = requests.get(SONARQUBE_URL, headers=headers, params=params)
-        
-        if response.status_code == 200:
-            try:
-                data = response.json()
-                issues = data.get('issues', [])
-                all_issues.extend(issues)
-                
-                # Check if there are more pages
-                if len(issues) < page_size:
-                    break  # No more pages
-                else:
-                    params['p'] += 1  # Next page
-            except requests.exceptions.JSONDecodeError as e:
-                print('Failed to parse JSON response:', e)
-                print('Response content:', response.text)
-                break
-        else:
-            print(f'Failed to fetch issues. Status code: {response.status_code}')
-            print('Response content:', response.text)
-            break
-
-    current_start_date = current_end_date
-
-if all_issues:
-    # Convert to DataFrame
-    df = pd.DataFrame(all_issues)
-    # Save to Excel
-    df.to_excel('sonarqube_issues.xlsx', index=False)
-    print('Issues exported to sonarqube_issues.xlsx')
-else:
-    print('No issues found.')
+# Export to CSV for cross-platform compatibility
+python sonar-export.py --format csv
 ```
+
+### Using SonarCloud
+
+```bash
+# Set up environment variables for SonarCloud
+export SONAR_URL='https://sonarcloud.io/api/issues/search'
+export SONAR_PROJECT_KEY='my-project'
+export SONAR_TOKEN='your-token-here'
+
+# Export to Excel (default)
+python sonar-export.py
+
+# Export to CSV for cross-platform compatibility
+python sonar-export.py --format csv
+```
+
+Example output:
+```
+Fetching issues from 2025-01-01 to 2025-01-31...
+Found 1234 issues so far...
+Fetching issues from 2025-01-31 to 2025-03-02...
+Found 2567 issues so far...
+Writing chunk of 5000 issues to CSV...
+...
+✅ Export completed: 7891 issues exported to sonarqube_issues.csv
+📊 Date range: 2025-01-01 to 2025-11-13
+```
+
+## Customization
+
+You can customize the date range and other parameters by editing the script:
+
+- `start_date`: Change the start date for issue retrieval (default: 2025-01-01)
+- `end_date`: Change the end date (default: current date)
+- `delta`: Adjust the date range chunk size (default: 30 days)
+- `chunk_size`: Change how often data is written to disk (default: 5000 issues)
 
 ## License
 
