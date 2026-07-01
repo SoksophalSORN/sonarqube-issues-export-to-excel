@@ -1,6 +1,8 @@
 
 # SonarQube Issues Export
 
+This is a fork from talha2k/sonarqube-issues-export-to-excel. I forked it to customize the code for my own use.
+
 This Python script fetches issues from a SonarQube project and exports them to CSV or Excel format. It uses the SonarQube REST API and handles pagination, date ranges, and chunked writing to efficiently retrieve and export large numbers of issues.
 
 **Compatible with both local SonarQube instances (localhost:9000) and SonarCloud.**
