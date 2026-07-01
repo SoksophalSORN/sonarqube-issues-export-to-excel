@@ -20,24 +20,52 @@ TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
-parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='csv',
+parser.add_argument('-f', '--format', type=str, choices=['csv', 'xlsx'],
                     help='Output format: csv or xlsx (default: csv)')
-parser.add_argument('--branch', type=str, default=os.getenv('SONAR_BRANCH', ''),
+parser.add_argument('-o', '--output', type=str,
+                    help='Output filename. If no extension is provided, the selected format is appended')
+parser.add_argument('-b', '--branch', type=str, default=os.getenv('SONAR_BRANCH', ''),
                     help='Export only this SonarQube branch. If omitted, all project branches are exported')
-parser.add_argument('--issue-status', type=str, choices=['open', 'fixed'],
+parser.add_argument('-is', '--issue-status', type=str, choices=['open', 'fixed'],
                     help='Export only issues with this issue_status value')
-parser.add_argument('--status', type=str, choices=['open', 'close', 'closed'],
+parser.add_argument('-s', '--status', type=str, choices=['open', 'close', 'closed'],
                     help='Export only issues with this status value')
-parser.add_argument('--minimal', action='store_true',
+parser.add_argument('-m', '--minimal', action='store_true',
                     help='Export only issues where issue_status is OPEN and status is OPEN')
+parser.add_argument('-q', '--quiet', action='store_true',
+                    help='Suppress progress output and print only the final export summary')
 args = parser.parse_args()
 
 if args.minimal and (args.issue_status or args.status):
     parser.error('--minimal cannot be used with --issue-status or --status')
 
+if args.output:
+    _, output_ext = os.path.splitext(args.output)
+    output_ext = output_ext.lower()
+    if not output_ext:
+        args.format = args.format or 'csv'
+        args.output = f'{args.output}.{args.format}'
+    elif output_ext not in ('.csv', '.xlsx'):
+        parser.error('--output must end with .csv or .xlsx')
+    elif args.format and output_ext[1:] != args.format:
+        parser.error('--output extension must match --format')
+    else:
+        args.format = output_ext[1:]
+
+    output_dir = os.path.dirname(args.output)
+    if output_dir and not os.path.isdir(output_dir):
+        parser.error(f"output directory does not exist: {output_dir}")
+else:
+    args.format = args.format or 'csv'
+
 # Add basic input validation after argument parsing so --help can run without credentials.
 if not PROJECT_KEY or not TOKEN:
     parser.error('SONAR_PROJECT_KEY and SONAR_TOKEN must be configured')
+
+
+def log(message):
+    if not args.quiet:
+        print(message)
 
 ISSUE_STATUS_FILTERS = {
     'open': 'OPEN',
@@ -147,18 +175,18 @@ def request_json(url, params, error_context, quiet_statuses=None):
         if response.status_code != 200:
             if response.status_code in quiet_statuses:
                 return None
-            print(f"❌ Failed to {error_context}: HTTP {response.status_code}")
-            print('Response content:', response.text)
+            log(f"❌ Failed to {error_context}: HTTP {response.status_code}")
+            log(f"Response content: {response.text}")
             return None
         return response.json()
     except requests.exceptions.JSONDecodeError as e:
-        print(f"❌ Failed to parse JSON while trying to {error_context}: {e}")
+        log(f"❌ Failed to parse JSON while trying to {error_context}: {e}")
     except requests.exceptions.Timeout:
-        print(f"❌ Connection timed out while trying to {error_context}.")
+        log(f"❌ Connection timed out while trying to {error_context}.")
     except requests.exceptions.ConnectionError:
-        print(f"❌ Connection error while trying to {error_context}.")
+        log(f"❌ Connection error while trying to {error_context}.")
     except Exception as e:
-        print(f"❌ Unexpected error while trying to {error_context}: {e}")
+        log(f"❌ Unexpected error while trying to {error_context}: {e}")
     return None
 
 
@@ -175,12 +203,12 @@ def list_project_branches():
     )
     if not data:
         if args.branch:
-            print(
+            log(
                 f"⚠️  Branch support is unavailable, so --branch '{args.branch}' cannot be applied. "
                 "Falling back to default project issue export without branch/revision metadata."
             )
         else:
-            print(
+            log(
                 "⚠️  Branch support is unavailable. Falling back to default project issue export "
                 "without branch/revision metadata."
             )
@@ -192,7 +220,7 @@ def list_project_branches():
         if matching_branches:
             return matching_branches
 
-        print(f"⚠️  Branch '{args.branch}' was not found. Falling back to an empty export target for that branch.")
+        log(f"⚠️  Branch '{args.branch}' was not found. Falling back to an empty export target for that branch.")
         return [{'name': args.branch, 'isMain': False, 'analysisDate': '', 'branch_supported': True}]
 
     return branches
@@ -219,7 +247,7 @@ def get_latest_branch_analysis(branch):
     if analyses:
         latest_analysis = analyses[0]
         if not latest_analysis.get('revision'):
-            print(
+            log(
                 f"⚠️  Latest analysis for branch '{branch_name}' has no revision. "
                 "The commit_sha column will be empty for this branch."
             )
@@ -274,7 +302,7 @@ def get_line_commit_sha(issue, branch_name):
     try:
         response = requests.get(api_url('/api/sources/lines'), headers=headers, params=params, timeout=30)
         if response.status_code == 403:
-            print(
+            log(
                 "⚠️  Cannot read source-line SCM data: SonarQube returned HTTP 403. "
                 "The token needs 'See Source Code' permission on the project. "
                 "The line_commit_sha column will be empty."
@@ -282,21 +310,21 @@ def get_line_commit_sha(issue, branch_name):
             line_commit_lookup_disabled = True
             return ''
         if response.status_code != 200:
-            print(f"❌ Failed to get SCM revision for {component}:{line} on branch '{branch_name}': HTTP {response.status_code}")
-            print('Response content:', response.text)
+            log(f"❌ Failed to get SCM revision for {component}:{line} on branch '{branch_name}': HTTP {response.status_code}")
+            log(f"Response content: {response.text}")
             return ''
         data = response.json()
     except requests.exceptions.JSONDecodeError as e:
-        print(f"❌ Failed to parse SCM revision JSON for {component}:{line} on branch '{branch_name}': {e}")
+        log(f"❌ Failed to parse SCM revision JSON for {component}:{line} on branch '{branch_name}': {e}")
         return ''
     except requests.exceptions.Timeout:
-        print(f"❌ Timed out while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
+        log(f"❌ Timed out while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
         return ''
     except requests.exceptions.ConnectionError:
-        print(f"❌ Connection error while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
+        log(f"❌ Connection error while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
         return ''
     except Exception as e:
-        print(f"❌ Unexpected error while getting SCM revision for {component}:{line} on branch '{branch_name}': {e}")
+        log(f"❌ Unexpected error while getting SCM revision for {component}:{line} on branch '{branch_name}': {e}")
         return ''
 
     sources = data.get('sources', []) if data else []
@@ -432,10 +460,10 @@ delta = timedelta(days=30)  # Adjust the range to ensure < 10,000 results
 
 current_start_date = start_date
 all_issues = []
-requested_output_file = f'sonarqube_issues.{args.format}'
+requested_output_file = args.output or f'sonarqube_issues.{args.format}'
 output_file = get_available_filename(requested_output_file)
 if output_file != requested_output_file:
-    print(f"Output file '{requested_output_file}' already exists. Exporting to '{output_file}' instead.")
+    log(f"Output file '{requested_output_file}' already exists. Exporting to '{output_file}' instead.")
 chunk_size = 5000  # Write to file every 5000 issues
 write_mode = 'w'  # Start with write mode for the first chunk
 total_issues_count = 0
@@ -446,7 +474,7 @@ write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_
 
 branches = list_project_branches()
 if not branches:
-    print('No branches found to export. Falling back to default project issue export without branch/revision metadata.')
+    log('No branches found to export. Falling back to default project issue export without branch/revision metadata.')
     branches = [branchless_export_target()]
 active_output_columns = output_columns_for_branches(branches)
 
@@ -456,9 +484,9 @@ for branch in branches:
     current_start_date = start_date
 
     if branch.get('branch_supported') is False:
-        print("Exporting default project issues without branch metadata...")
+        log("Exporting default project issues without branch metadata...")
     else:
-        print(f"Exporting branch '{branch_name}'...")
+        log(f"Exporting branch '{branch_name}'...")
 
     while current_start_date < end_date:
         current_end_date = current_start_date + delta
@@ -466,12 +494,12 @@ for branch in branches:
             current_end_date = end_date
 
         if branch.get('branch_supported') is False:
-            print(
+            log(
                 f"Fetching default project issues from "
                 f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
             )
         else:
-            print(
+            log(
                 f"Fetching issues for branch '{branch_name}' from "
                 f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
             )
@@ -507,7 +535,7 @@ for branch in branches:
 
             # Write to file in chunks to save memory
             if len(all_issues) >= chunk_size:
-                print(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
+                log(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
                 write_function(output_file, all_issues, write_mode)
                 all_issues = []  # Clear memory
                 write_mode = 'a'  # Switch to append mode after first write
@@ -519,11 +547,11 @@ for branch in branches:
                 params['p'] += 1  # Next page
 
         current_start_date = current_end_date
-        print(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
+        log(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
 
 # Handle any remaining issues
 if all_issues:
-    print(f"Writing final chunk of {len(all_issues)} issues to {args.format.upper()}...")
+    log(f"Writing final chunk of {len(all_issues)} issues to {args.format.upper()}...")
     write_function(output_file, all_issues, write_mode)
 
 if total_exported_count > 0:

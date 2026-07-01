@@ -73,6 +73,14 @@ This will export issues to `sonarqube_issues.csv` by default.
 
 If no branch is specified, the script lists all project branches and exports issues from each branch.
 
+To choose the report filename:
+
+```bash
+python sonar-export.py --output reports/sonarqube-ai.csv
+```
+
+If the output filename has no extension, the selected format is appended. For example, `--output reports/sonarqube-ai` writes `reports/sonarqube-ai.csv` by default.
+
 ### Export to Excel
 
 You can export to Excel format:
@@ -83,20 +91,27 @@ python sonar-export.py --format xlsx
 
 This will export issues to `sonarqube_issues.xlsx`.
 
+You can also infer the format from the output filename:
+
+```bash
+python sonar-export.py --output reports/sonarqube-ai.xlsx
+```
+
 If the target export file already exists, the script preserves it and writes to the next available numbered filename instead, such as `sonarqube_issues-1.csv`, `sonarqube_issues-2.csv`, or `sonarqube_issues-3.xlsx`.
 
 ### Export Options
 
 ```bash
-python sonar-export.py --format [csv|xlsx]
+python sonar-export.py --format [csv|xlsx] --output <filename>
 ```
 
-- `--format csv`: Export to CSV format (default; better cross-platform compatibility, smaller file size)
-- `--format xlsx`: Export to Excel format (better for viewing in spreadsheet applications)
-- `--branch <name>`: Export only this SonarQube branch. On SonarQube CE, this requires the community branch plugin
-- `--issue-status open|fixed`: Export only rows where `issue_status` is `OPEN` or `FIXED`
-- `--status open|close`: Export only rows where `status` is `OPEN` or `CLOSED`
-- `--minimal`: Export only rows where `issue_status` is `OPEN` and `status` is `OPEN`
+- `-f`, `--format csv|xlsx`: Export to CSV format or Excel format. CSV is the default
+- `-o`, `--output <filename>`: Choose the output filename. If no extension is provided, the selected format is appended
+- `-b`, `--branch <name>`: Export only this SonarQube branch. On SonarQube CE, this requires the community branch plugin
+- `-is`, `--issue-status open|fixed`: Export only rows where `issue_status` is `OPEN` or `FIXED`
+- `-s`, `--status open|close`: Export only rows where `status` is `OPEN` or `CLOSED`
+- `-m`, `--minimal`: Export only rows where `issue_status` is `OPEN` and `status` is `OPEN`
+- `-q`, `--quiet`: Suppress progress messages and print only the final export summary
 
 `--issue-status` and `--status` can be used together in any order. If neither is specified, the script exports every issue returned by SonarQube. `--minimal` must be used by itself and cannot be combined with `--issue-status` or `--status`.
 
@@ -104,21 +119,33 @@ Examples:
 
 ```bash
 # Export only currently open actionable issues
-python sonar-export.py --format csv --minimal
+python sonar-export.py -f csv -m
 
 # Export only the main branch
-python sonar-export.py --format csv --branch main
+python sonar-export.py -f csv --branch main
 
 # Export fixed issues regardless of the status column
-python sonar-export.py --format csv --issue-status fixed
+python sonar-export.py -f csv -is fixed
 
 # Export only rows where both filters match
-python sonar-export.py --format csv --issue-status open --status open
+python sonar-export.py -f csv -is open -s open
+
+# Generate a quiet AI-agent report with a custom filename
+python sonar-export.py -q -m -o reports/sonarqube-ai.csv
+```
+
+In quiet mode, successful exports print only the final summary:
+
+```text
+✅ Export completed: 2149 issues exported to sonarqube_issues.csv
+📥 Total issues fetched before filters: 2149
+📊 Date range: 2000-01-01 to 2026-07-02
 ```
 
 ## Features
 
 - **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
+- **Custom Output Filename**: Choose the report filename with `--output`
 - **Safe Export Filenames**: Avoids overwriting existing exports by adding a numbered suffix when needed
 - **AI-Friendly Columns**: Exports a stable set of issue columns for AI-agent triage and fixing
 - **Branch-Aware Export**: Exports all SonarQube branches by default, or one branch when `--branch` is provided. On SonarQube CE, this requires the community branch plugin
@@ -134,6 +161,7 @@ python sonar-export.py --format csv --issue-status open --status open
   - Network errors
 - **Environment Variable Support**: Configure via environment variables for better security
 - **Progress Reporting**: Shows real-time progress during export
+- **Quiet Mode**: Use `--quiet` or `-q` to print only the final export summary
 
 ## Exported Columns
 
@@ -204,15 +232,13 @@ python sonar-export.py --format xlsx
 ```
 
 Example output:
-```
-Fetching issues from 2025-01-01 to 2025-01-31...
-Found 1234 issues so far...
-Fetching issues from 2025-01-31 to 2025-03-02...
-Found 2567 issues so far...
-Writing chunk of 5000 issues to CSV...
+```text
+Fetching issues for branch 'main' from 2000-01-01 to 2000-01-31...
+Fetched 1234 issues so far; 1200 matched export filters...
 ...
 ✅ Export completed: 7891 issues exported to sonarqube_issues.csv
-📊 Date range: 2025-01-01 to 2025-11-13
+📥 Total issues fetched before filters: 8000
+📊 Date range: 2000-01-01 to 2026-07-02
 ```
 
 ## Customization
