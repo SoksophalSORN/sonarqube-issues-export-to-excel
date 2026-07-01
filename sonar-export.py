@@ -22,13 +22,8 @@ TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
 parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
 parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='xlsx',
                     help='Output format: csv or xlsx (default: xlsx)')
-parser.add_argument('--branch', type=str, default=os.getenv('SONAR_BRANCH', os.getenv('GIT_BRANCH', '')),
-                    help='Source branch name to write into the export metadata column')
-parser.add_argument('--commit-sha', type=str,
-                    default=os.getenv('SONAR_COMMIT_SHA', os.getenv('COMMIT_SHA', os.getenv('GIT_COMMIT', ''))),
-                    help='Source commit SHA to write into the export metadata column')
-parser.add_argument('--analysis-date', type=str, default=os.getenv('SONAR_ANALYSIS_DATE', ''),
-                    help='Analysis date to write into the export metadata column')
+parser.add_argument('--branch', type=str, default=os.getenv('SONAR_BRANCH', ''),
+                    help='Export only this SonarQube branch. If omitted, all project branches are exported')
 parser.add_argument('--issue-status', type=str, choices=['open', 'fixed'],
                     help='Export only issues with this issue_status value')
 parser.add_argument('--status', type=str, choices=['open', 'close', 'closed'],
@@ -43,8 +38,6 @@ if args.minimal and (args.issue_status or args.status):
 # Add basic input validation after argument parsing so --help can run without credentials.
 if not PROJECT_KEY or not TOKEN:
     parser.error('SONAR_PROJECT_KEY and SONAR_TOKEN must be configured')
-
-EXPORT_ANALYSIS_DATE = args.analysis_date or datetime.now().astimezone().isoformat(timespec='seconds')
 
 ISSUE_STATUS_FILTERS = {
     'open': 'OPEN',
@@ -67,6 +60,7 @@ else:
 OUTPUT_COLUMNS = [
     'branch',
     'commit_sha',
+    'line_commit_sha',
     'analysis_date',
     'issue_key',
     'rule',
@@ -125,6 +119,140 @@ def file_path_from_component(component):
     return component
 
 
+def sonar_server_url():
+    issues_endpoint = '/api/issues/search'
+    url = SONARQUBE_URL.rstrip('/')
+    if url.endswith(issues_endpoint):
+        return url[:-len(issues_endpoint)]
+    return url
+
+
+SONAR_SERVER_URL = sonar_server_url()
+
+
+def api_url(path):
+    return f"{SONAR_SERVER_URL}{path}"
+
+
+def request_json(url, params, error_context):
+    try:
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        if response.status_code != 200:
+            print(f"❌ Failed to {error_context}: HTTP {response.status_code}")
+            print('Response content:', response.text)
+            return None
+        return response.json()
+    except requests.exceptions.JSONDecodeError as e:
+        print(f"❌ Failed to parse JSON while trying to {error_context}: {e}")
+    except requests.exceptions.Timeout:
+        print(f"❌ Connection timed out while trying to {error_context}.")
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Connection error while trying to {error_context}.")
+    except Exception as e:
+        print(f"❌ Unexpected error while trying to {error_context}: {e}")
+    return None
+
+
+def list_project_branches():
+    if args.branch:
+        return [{'name': args.branch, 'isMain': False, 'analysisDate': ''}]
+
+    data = request_json(
+        api_url('/api/project_branches/list'),
+        {'project': PROJECT_KEY},
+        'list project branches'
+    )
+    if not data:
+        return []
+
+    branches = data.get('branches', [])
+    return [branch for branch in branches if branch.get('name')]
+
+
+def get_latest_branch_analysis(branch):
+    branch_name = branch.get('name', '')
+    params = {
+        'project': PROJECT_KEY,
+        'branch': branch_name,
+        'ps': 1,
+        'p': 1,
+    }
+    data = request_json(
+        api_url('/api/project_analyses/search'),
+        params,
+        f"get latest analysis for branch '{branch_name}'"
+    )
+
+    analyses = data.get('analyses', []) if data else []
+    if analyses:
+        latest_analysis = analyses[0]
+        return {
+            'revision': latest_analysis.get('revision', ''),
+            'date': latest_analysis.get('date', branch.get('analysisDate', '')),
+        }
+
+    return {
+        'revision': '',
+        'date': branch.get('analysisDate', ''),
+    }
+
+
+line_commit_cache = {}
+
+
+def issue_line(issue):
+    line = issue.get('line')
+    if line:
+        return line
+
+    text_range = issue.get('textRange') or {}
+    if isinstance(text_range, dict):
+        return text_range.get('startLine', '')
+
+    return ''
+
+
+def get_line_commit_sha(issue, branch_name):
+    component = issue.get('component')
+    line = issue_line(issue)
+    if not component or not line:
+        return ''
+
+    cache_key = (branch_name, component, line)
+    if cache_key in line_commit_cache:
+        return line_commit_cache[cache_key]
+
+    params = {
+        'key': component,
+        'branch': branch_name,
+        'from': line,
+        'to': line,
+    }
+    data = request_json(
+        api_url('/api/sources/lines'),
+        params,
+        f"get SCM revision for {component}:{line} on branch '{branch_name}'"
+    )
+
+    sources = data.get('sources', []) if data else []
+    line_commit_sha = ''
+    if sources:
+        line_commit_sha = sources[0].get('scmRevision', '')
+
+    line_commit_cache[cache_key] = line_commit_sha
+    return line_commit_sha
+
+
+def enrich_issue(issue, branch, branch_analysis):
+    enriched_issue = dict(issue)
+    branch_name = branch.get('name', '')
+    enriched_issue['_export_branch'] = branch_name
+    enriched_issue['_analysis_commit_sha'] = branch_analysis.get('revision', '')
+    enriched_issue['_analysis_date'] = branch_analysis.get('date', '')
+    enriched_issue['_line_commit_sha'] = get_line_commit_sha(issue, branch_name)
+    return enriched_issue
+
+
 def should_export_issue(issue):
     if ISSUE_STATUS_FILTER and issue.get('issueStatus') != ISSUE_STATUS_FILTER:
         return False
@@ -143,9 +271,10 @@ def normalize_issue(issue):
     ]
 
     return {
-        'branch': args.branch,
-        'commit_sha': args.commit_sha,
-        'analysis_date': EXPORT_ANALYSIS_DATE,
+        'branch': issue.get('_export_branch', issue.get('branch', '')),
+        'commit_sha': issue.get('_analysis_commit_sha', ''),
+        'line_commit_sha': issue.get('_line_commit_sha', ''),
+        'analysis_date': issue.get('_analysis_date', ''),
         'issue_key': issue.get('key', ''),
         'rule': issue.get('rule', ''),
         'severity': issue.get('severity', ''),
@@ -241,73 +370,70 @@ total_exported_count = 0
 # Select the appropriate write function based on format
 write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_excel
 
-while current_start_date < end_date:
-    current_end_date = current_start_date + delta
-    if current_end_date > end_date:
-        current_end_date = end_date
-        
-    print(f"Fetching issues from {current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}...")
+branches = list_project_branches()
+if not branches:
+    print('No branches found to export.')
 
-    params = { #Adjust as required
-        'componentKeys': PROJECT_KEY,
-        'createdAfter': current_start_date.strftime('%Y-%m-%d'),
-        'createdBefore': current_end_date.strftime('%Y-%m-%d'),
-        'ps': page_size,
-        'p': 1
-    }
+for branch in branches:
+    branch_name = branch.get('name', '')
+    branch_analysis = get_latest_branch_analysis(branch)
+    current_start_date = start_date
 
-    while True:
-        try:
-            response = requests.get(SONARQUBE_URL, headers=headers, params=params, timeout=30)
-            
-            if response.status_code == 200:
-                try:
-                    data = response.json()
-                    issues = data.get('issues', [])
-                    filtered_issues = [issue for issue in issues if should_export_issue(issue)]
-                    all_issues.extend(filtered_issues)
-                    total_issues_count += len(issues)
-                    total_exported_count += len(filtered_issues)
-                    
-                    # Write to file in chunks to save memory
-                    if len(all_issues) >= chunk_size:
-                        print(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
-                        write_function(output_file, all_issues, write_mode)
-                        all_issues = []  # Clear memory
-                        write_mode = 'a'  # Switch to append mode after first write
-                    
-                    # Check if there are more pages
-                    if len(issues) < page_size:
-                        break  # No more pages
-                    else:
-                        params['p'] += 1  # Next page
-                except requests.exceptions.JSONDecodeError as e:
-                    print('Failed to parse JSON response:', e)
-                    print('Response content:', response.text)
-                    break
-            else:
-                if response.status_code == 401:
-                    print('❌ Authentication failed. Check your TOKEN.')
-                elif response.status_code == 404:
-                    print('❌ Project not found. Check your PROJECT_KEY and SONARQUBE_URL.')
-                elif response.status_code == 403:
-                    print('❌ Access denied. Check project permissions.')
-                else:
-                    print(f'❌ API request failed with status {response.status_code}')
-                print('Response content:', response.text)
+    print(f"Exporting branch '{branch_name}'...")
+
+    while current_start_date < end_date:
+        current_end_date = current_start_date + delta
+        if current_end_date > end_date:
+            current_end_date = end_date
+
+        print(
+            f"Fetching issues for branch '{branch_name}' from "
+            f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
+        )
+
+        params = { #Adjust as required
+            'componentKeys': PROJECT_KEY,
+            'branch': branch_name,
+            'createdAfter': current_start_date.strftime('%Y-%m-%d'),
+            'createdBefore': current_end_date.strftime('%Y-%m-%d'),
+            'ps': page_size,
+            'p': 1
+        }
+
+        while True:
+            data = request_json(
+                api_url('/api/issues/search'),
+                params,
+                f"fetch issues for branch '{branch_name}'"
+            )
+            if data is None:
                 break
-        except requests.exceptions.Timeout:
-            print('❌ Connection timed out. Check your network or try again later.')
-            break
-        except requests.exceptions.ConnectionError:
-            print('❌ Connection error. Check your network and SONARQUBE_URL.')
-            break
-        except Exception as e:
-            print(f'❌ Unexpected error occurred: {e}')
-            break
-            
-    current_start_date = current_end_date
-    print(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
+
+            issues = data.get('issues', [])
+            filtered_issues = [
+                enrich_issue(issue, branch, branch_analysis)
+                for issue in issues
+                if should_export_issue(issue)
+            ]
+            all_issues.extend(filtered_issues)
+            total_issues_count += len(issues)
+            total_exported_count += len(filtered_issues)
+
+            # Write to file in chunks to save memory
+            if len(all_issues) >= chunk_size:
+                print(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
+                write_function(output_file, all_issues, write_mode)
+                all_issues = []  # Clear memory
+                write_mode = 'a'  # Switch to append mode after first write
+
+            # Check if there are more pages
+            if len(issues) < page_size:
+                break  # No more pages
+            else:
+                params['p'] += 1  # Next page
+
+        current_start_date = current_end_date
+        print(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
 
 # Handle any remaining issues
 if all_issues:

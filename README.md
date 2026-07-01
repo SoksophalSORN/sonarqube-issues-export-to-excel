@@ -45,9 +45,7 @@ Configure the script using environment variables. The script works with both loc
 export SONAR_URL='http://localhost:9000/api/issues/search'   # Local SonarQube instance
 export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
 export SONAR_TOKEN='your-authentication-token'               # Your authentication token
-export SONAR_BRANCH='main'                                   # Optional export metadata
-export SONAR_COMMIT_SHA='abc123...'                          # Optional export metadata
-export SONAR_ANALYSIS_DATE='2026-07-01T12:00:00+00:00'       # Optional export metadata
+export SONAR_BRANCH='main'                                   # Optional: export only one branch
 ```
 
 ### For SonarCloud
@@ -56,9 +54,7 @@ export SONAR_ANALYSIS_DATE='2026-07-01T12:00:00+00:00'       # Optional export m
 export SONAR_URL='https://sonarcloud.io/api/issues/search'   # SonarCloud instance
 export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
 export SONAR_TOKEN='your-authentication-token'               # Your authentication token
-export SONAR_BRANCH='main'                                   # Optional export metadata
-export SONAR_COMMIT_SHA='abc123...'                          # Optional export metadata
-export SONAR_ANALYSIS_DATE='2026-07-01T12:00:00+00:00'       # Optional export metadata
+export SONAR_BRANCH='main'                                   # Optional: export only one branch
 ```
 
 Alternatively, you can edit these values directly in the script.
@@ -72,6 +68,8 @@ python sonar-export.py
 ```
 
 This will export issues to `sonarqube_issues.xlsx` by default.
+
+If no branch is specified, the script lists all project branches and exports issues from each branch.
 
 ### Export to CSV
 
@@ -93,9 +91,7 @@ python sonar-export.py --format [csv|xlsx]
 
 - `--format csv`: Export to CSV format (better cross-platform compatibility, smaller file size)
 - `--format xlsx`: Export to Excel format (default, better for viewing in spreadsheet applications)
-- `--branch <name>`: Add the source branch name to each exported row
-- `--commit-sha <sha>`: Add the source commit SHA to each exported row
-- `--analysis-date <date>`: Add the analysis date to each exported row
+- `--branch <name>`: Export only this SonarQube branch. If omitted, all project branches are exported
 - `--issue-status open|fixed`: Export only rows where `issue_status` is `OPEN` or `FIXED`
 - `--status open|close`: Export only rows where `status` is `OPEN` or `CLOSED`
 - `--minimal`: Export only rows where `issue_status` is `OPEN` and `status` is `OPEN`
@@ -107,6 +103,9 @@ Examples:
 ```bash
 # Export only currently open actionable issues
 python sonar-export.py --format csv --minimal
+
+# Export only the main branch
+python sonar-export.py --format csv --branch main
 
 # Export fixed issues regardless of the status column
 python sonar-export.py --format csv --issue-status fixed
@@ -120,6 +119,8 @@ python sonar-export.py --format csv --issue-status open --status open
 - **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
 - **Safe Export Filenames**: Avoids overwriting existing exports by adding a numbered suffix when needed
 - **AI-Friendly Columns**: Exports a stable set of issue columns for AI-agent triage and fixing
+- **Branch-Aware Export**: Exports all SonarQube branches by default, or one branch when `--branch` is provided
+- **Revision Metadata**: Adds the analysis commit SHA and line-level SCM revision when SonarQube provides them
 - **Chunked Writing**: Writes data in chunks (every 5000 issues) to minimize memory usage for large exports
 - **Date Range Handling**: Automatically splits requests into date ranges to handle SonarQube's 10,000 result limit
 - **Pagination Support**: Handles pagination to fetch all issues within each date range
@@ -139,6 +140,7 @@ The report includes these columns:
 ```text
 branch
 commit_sha
+line_commit_sha
 analysis_date
 issue_key
 rule
@@ -158,6 +160,8 @@ creationDate
 updateDate
 impacts
 ```
+
+`branch` is the SonarQube branch analyzed for the issue. `commit_sha` is the Git revision of the SonarQube analysis for that branch. `line_commit_sha` is the Git revision that last touched the flagged line when SonarQube SCM data is available.
 
 Nested SonarQube fields such as `textRange`, `flows`, and `impacts` are stored as JSON strings so AI agents can preserve secondary locations and issue-flow context.
 
