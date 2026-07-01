@@ -1,9 +1,9 @@
 try:
     import pandas as pd
     import requests
-    import base64
     import os
     import argparse
+    import json
     from datetime import datetime, timedelta
 except ImportError as e:
     print(f"Missing required dependency: {e}")
@@ -26,6 +26,98 @@ parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='xlsx
                     help='Output format: csv or xlsx (default: xlsx)')
 args = parser.parse_args()
 
+OUTPUT_COLUMNS = [
+    'issue_key',
+    'rule',
+    'severity',
+    'impact_severity',
+    'software_quality',
+    'type',
+    'status',
+    'issue_status',
+    'component',
+    'file_path',
+    'line',
+    'message',
+    'textRange',
+    'flows',
+    'creationDate',
+    'updateDate',
+    'impacts',
+]
+
+SEVERITY_ORDER = {
+    'BLOCKER': 0,
+    'CRITICAL': 1,
+    'HIGH': 2,
+    'MAJOR': 3,
+    'MEDIUM': 4,
+    'MINOR': 5,
+    'LOW': 6,
+    'INFO': 7,
+}
+
+
+def json_cell(value):
+    if value in (None, ''):
+        return ''
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def join_unique(values):
+    clean_values = []
+    for value in values:
+        if value and value not in clean_values:
+            clean_values.append(value)
+    return '; '.join(clean_values)
+
+
+def sort_severities(severities):
+    return sorted(severities, key=lambda value: SEVERITY_ORDER.get(value, 99))
+
+
+def file_path_from_component(component):
+    if not component:
+        return ''
+    if ':' in component:
+        return component.split(':', 1)[1]
+    return component
+
+
+def normalize_issue(issue):
+    impacts = issue.get('impacts') or []
+    impact_severities = sort_severities(
+        impact.get('severity') for impact in impacts if isinstance(impact, dict)
+    )
+    software_qualities = [
+        impact.get('softwareQuality') for impact in impacts if isinstance(impact, dict)
+    ]
+
+    return {
+        'issue_key': issue.get('key', ''),
+        'rule': issue.get('rule', ''),
+        'severity': issue.get('severity', ''),
+        'impact_severity': join_unique(impact_severities),
+        'software_quality': join_unique(software_qualities),
+        'type': issue.get('type', ''),
+        'status': issue.get('status', ''),
+        'issue_status': issue.get('issueStatus', ''),
+        'component': issue.get('component', ''),
+        'file_path': file_path_from_component(issue.get('component', '')),
+        'line': issue.get('line', ''),
+        'message': issue.get('message', ''),
+        'textRange': json_cell(issue.get('textRange')),
+        'flows': json_cell(issue.get('flows')),
+        'creationDate': issue.get('creationDate', ''),
+        'updateDate': issue.get('updateDate', ''),
+        'impacts': json_cell(impacts),
+    }
+
+
+def normalize_issues(issues):
+    return [normalize_issue(issue) for issue in issues]
+
+
 # Function to write data in chunks to CSV
 def write_chunk_to_csv(filename, chunk_data, mode='w'):
     """
@@ -41,13 +133,13 @@ def write_chunk_to_csv(filename, chunk_data, mode='w'):
         - Writes the DataFrame to the specified CSV file.
         - If mode is 'w', includes the header; if 'a', omits the header.
     """
-    df = pd.DataFrame(chunk_data)
+    df = pd.DataFrame(normalize_issues(chunk_data), columns=OUTPUT_COLUMNS)
     # For CSV, we can simply append with or without header
     df.to_csv(filename, index=False, mode=mode, header=(mode == 'w'))
 
 # Function to write data in chunks to Excel
 def write_chunk_to_excel(filename, chunk_data, mode='w'):
-    df = pd.DataFrame(chunk_data)
+    df = pd.DataFrame(normalize_issues(chunk_data), columns=OUTPUT_COLUMNS)
     if mode == 'w':
         # First chunk: create new file
         df.to_excel(filename, index=False, engine='openpyxl')

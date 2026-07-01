@@ -89,6 +89,7 @@ python sonar-export.py --format [csv|xlsx]
 ## Features
 
 - **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
+- **AI-Friendly Columns**: Exports a stable set of issue columns for AI-agent triage and fixing
 - **Chunked Writing**: Writes data in chunks (every 5000 issues) to minimize memory usage for large exports
 - **Date Range Handling**: Automatically splits requests into date ranges to handle SonarQube's 10,000 result limit
 - **Pagination Support**: Handles pagination to fetch all issues within each date range
@@ -100,6 +101,32 @@ python sonar-export.py --format [csv|xlsx]
   - Network errors
 - **Environment Variable Support**: Configure via environment variables for better security
 - **Progress Reporting**: Shows real-time progress during export
+
+## Exported Columns
+
+The report includes these columns:
+
+```text
+issue_key
+rule
+severity
+impact_severity
+software_quality
+type
+status
+issue_status
+component
+file_path
+line
+message
+textRange
+flows
+creationDate
+updateDate
+impacts
+```
+
+Nested SonarQube fields such as `textRange`, `flows`, and `impacts` are stored as JSON strings so AI agents can preserve secondary locations and issue-flow context.
 
 ## Example
 
