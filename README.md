@@ -83,6 +83,8 @@ python sonar-export.py --format csv
 
 This will export issues to `sonarqube_issues.csv`.
 
+If the target export file already exists, the script preserves it and writes to the next available numbered filename instead, such as `sonarqube_issues-1.csv`, `sonarqube_issues-2.csv`, or `sonarqube_issues-3.xlsx`.
+
 ### Export Options
 
 ```bash
@@ -116,6 +118,7 @@ python sonar-export.py --format csv --issue-status open --status open
 ## Features
 
 - **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
+- **Safe Export Filenames**: Avoids overwriting existing exports by adding a numbered suffix when needed
 - **AI-Friendly Columns**: Exports a stable set of issue columns for AI-agent triage and fixing
 - **Chunked Writing**: Writes data in chunks (every 5000 issues) to minimize memory usage for large exports
 - **Date Range Handling**: Automatically splits requests into date ranges to handle SonarQube's 10,000 result limit

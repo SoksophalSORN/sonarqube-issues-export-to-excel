@@ -170,6 +170,19 @@ def normalize_issues(issues):
     return [normalize_issue(issue) for issue in issues]
 
 
+def get_available_filename(filename):
+    if not os.path.exists(filename):
+        return filename
+
+    base, ext = os.path.splitext(filename)
+    counter = 1
+
+    while os.path.exists(f'{base}-{counter}{ext}'):
+        counter += 1
+
+    return f'{base}-{counter}{ext}'
+
+
 # Function to write data in chunks to CSV
 def write_chunk_to_csv(filename, chunk_data, mode='w'):
     """
@@ -216,7 +229,10 @@ delta = timedelta(days=30)  # Adjust the range to ensure < 10,000 results
 
 current_start_date = start_date
 all_issues = []
-output_file = f'sonarqube_issues.{args.format}'
+requested_output_file = f'sonarqube_issues.{args.format}'
+output_file = get_available_filename(requested_output_file)
+if output_file != requested_output_file:
+    print(f"Output file '{requested_output_file}' already exists. Exporting to '{output_file}' instead.")
 chunk_size = 5000  # Write to file every 5000 issues
 write_mode = 'w'  # Start with write mode for the first chunk
 total_issues_count = 0
