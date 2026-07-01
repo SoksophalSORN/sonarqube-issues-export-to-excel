@@ -7,6 +7,8 @@ This Python script fetches issues from a SonarQube project and exports them to C
 
 **Compatible with both local SonarQube instances (localhost:9000) and SonarCloud.**
 
+For SonarQube Community Edition, branch-aware export requires the `mc1arke/sonarqube-community-branch-plugin` plugin to be installed and working. Without that plugin, the script falls back to a normal project issue export and removes the `branch`, `commit_sha`, and `line_commit_sha` columns.
+
 ## Prerequisites
 
 - Python 3.x
@@ -61,25 +63,25 @@ Alternatively, you can edit these values directly in the script.
 
 ## Usage
 
-### Basic Usage (Excel format)
+### Basic Usage (CSV format)
 
 ```bash
 python sonar-export.py
 ```
 
-This will export issues to `sonarqube_issues.xlsx` by default.
+This will export issues to `sonarqube_issues.csv` by default.
 
 If no branch is specified, the script lists all project branches and exports issues from each branch.
 
-### Export to CSV
+### Export to Excel
 
-For better cross-platform compatibility, you can export to CSV format:
+You can export to Excel format:
 
 ```bash
-python sonar-export.py --format csv
+python sonar-export.py --format xlsx
 ```
 
-This will export issues to `sonarqube_issues.csv`.
+This will export issues to `sonarqube_issues.xlsx`.
 
 If the target export file already exists, the script preserves it and writes to the next available numbered filename instead, such as `sonarqube_issues-1.csv`, `sonarqube_issues-2.csv`, or `sonarqube_issues-3.xlsx`.
 
@@ -89,9 +91,9 @@ If the target export file already exists, the script preserves it and writes to 
 python sonar-export.py --format [csv|xlsx]
 ```
 
-- `--format csv`: Export to CSV format (better cross-platform compatibility, smaller file size)
-- `--format xlsx`: Export to Excel format (default, better for viewing in spreadsheet applications)
-- `--branch <name>`: Export only this SonarQube branch. If omitted, all project branches are exported
+- `--format csv`: Export to CSV format (default; better cross-platform compatibility, smaller file size)
+- `--format xlsx`: Export to Excel format (better for viewing in spreadsheet applications)
+- `--branch <name>`: Export only this SonarQube branch. On SonarQube CE, this requires the community branch plugin
 - `--issue-status open|fixed`: Export only rows where `issue_status` is `OPEN` or `FIXED`
 - `--status open|close`: Export only rows where `status` is `OPEN` or `CLOSED`
 - `--minimal`: Export only rows where `issue_status` is `OPEN` and `status` is `OPEN`
@@ -119,7 +121,7 @@ python sonar-export.py --format csv --issue-status open --status open
 - **Multiple Export Formats**: Export to CSV or Excel (XLSX) format
 - **Safe Export Filenames**: Avoids overwriting existing exports by adding a numbered suffix when needed
 - **AI-Friendly Columns**: Exports a stable set of issue columns for AI-agent triage and fixing
-- **Branch-Aware Export**: Exports all SonarQube branches by default, or one branch when `--branch` is provided
+- **Branch-Aware Export**: Exports all SonarQube branches by default, or one branch when `--branch` is provided. On SonarQube CE, this requires the community branch plugin
 - **Revision Metadata**: Adds the analysis commit SHA and line-level SCM revision when SonarQube provides them
 - **Chunked Writing**: Writes data in chunks (every 5000 issues) to minimize memory usage for large exports
 - **Date Range Handling**: Automatically splits requests into date ranges to handle SonarQube's 10,000 result limit
@@ -163,6 +165,8 @@ impacts
 
 `branch` is the SonarQube branch analyzed for the issue. `commit_sha` is the Git revision of the SonarQube analysis for that branch. `line_commit_sha` is the Git revision that last touched the flagged line when SonarQube SCM data is available.
 
+On SonarQube CE, these branch and revision metadata columns depend on the community branch plugin. If the plugin is not installed or the branch endpoints are unavailable, the script still exports issues but removes `branch`, `commit_sha`, and `line_commit_sha` from the report.
+
 Nested SonarQube fields such as `textRange`, `flows`, and `impacts` are stored as JSON strings so AI agents can preserve secondary locations and issue-flow context.
 
 ## Example
@@ -177,11 +181,11 @@ export SONAR_URL='http://localhost:9000/api/issues/search'
 export SONAR_PROJECT_KEY='my-project'
 export SONAR_TOKEN='your-token-here'
 
-# Export to Excel (default)
+# Export to CSV (default)
 python sonar-export.py
 
-# Export to CSV for cross-platform compatibility
-python sonar-export.py --format csv
+# Export to Excel
+python sonar-export.py --format xlsx
 ```
 
 ### Using SonarCloud
@@ -192,11 +196,11 @@ export SONAR_URL='https://sonarcloud.io/api/issues/search'
 export SONAR_PROJECT_KEY='my-project'
 export SONAR_TOKEN='your-token-here'
 
-# Export to Excel (default)
+# Export to CSV (default)
 python sonar-export.py
 
-# Export to CSV for cross-platform compatibility
-python sonar-export.py --format csv
+# Export to Excel
+python sonar-export.py --format xlsx
 ```
 
 Example output:

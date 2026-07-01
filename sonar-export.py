@@ -20,8 +20,8 @@ TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
-parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='xlsx',
-                    help='Output format: csv or xlsx (default: xlsx)')
+parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='csv',
+                    help='Output format: csv or xlsx (default: csv)')
 parser.add_argument('--branch', type=str, default=os.getenv('SONAR_BRANCH', ''),
                     help='Export only this SonarQube branch. If omitted, all project branches are exported')
 parser.add_argument('--issue-status', type=str, choices=['open', 'fixed'],
@@ -57,10 +57,14 @@ else:
     ISSUE_STATUS_FILTER = ISSUE_STATUS_FILTERS.get(args.issue_status)
     STATUS_FILTER = STATUS_FILTERS.get(args.status)
 
-OUTPUT_COLUMNS = [
+BRANCH_METADATA_COLUMNS = [
     'branch',
     'commit_sha',
     'line_commit_sha',
+]
+
+OUTPUT_COLUMNS = [
+    *BRANCH_METADATA_COLUMNS,
     'analysis_date',
     'issue_key',
     'rule',
@@ -80,6 +84,8 @@ OUTPUT_COLUMNS = [
     'updateDate',
     'impacts',
 ]
+
+active_output_columns = OUTPUT_COLUMNS
 
 SEVERITY_ORDER = {
     'BLOCKER': 0,
@@ -134,10 +140,13 @@ def api_url(path):
     return f"{SONAR_SERVER_URL}{path}"
 
 
-def request_json(url, params, error_context):
+def request_json(url, params, error_context, quiet_statuses=None):
+    quiet_statuses = quiet_statuses or set()
     try:
         response = requests.get(url, headers=headers, params=params, timeout=30)
         if response.status_code != 200:
+            if response.status_code in quiet_statuses:
+                return None
             print(f"❌ Failed to {error_context}: HTTP {response.status_code}")
             print('Response content:', response.text)
             return None
@@ -153,23 +162,46 @@ def request_json(url, params, error_context):
     return None
 
 
-def list_project_branches():
-    if args.branch:
-        return [{'name': args.branch, 'isMain': False, 'analysisDate': ''}]
+def branchless_export_target():
+    return {'name': '', 'isMain': True, 'analysisDate': '', 'branch_supported': False}
 
+
+def list_project_branches():
     data = request_json(
         api_url('/api/project_branches/list'),
         {'project': PROJECT_KEY},
-        'list project branches'
+        'list project branches',
+        quiet_statuses={403, 404}
     )
     if not data:
-        return []
+        if args.branch:
+            print(
+                f"⚠️  Branch support is unavailable, so --branch '{args.branch}' cannot be applied. "
+                "Falling back to default project issue export without branch/revision metadata."
+            )
+        else:
+            print(
+                "⚠️  Branch support is unavailable. Falling back to default project issue export "
+                "without branch/revision metadata."
+            )
+        return [branchless_export_target()]
 
-    branches = data.get('branches', [])
-    return [branch for branch in branches if branch.get('name')]
+    branches = [branch for branch in data.get('branches', []) if branch.get('name')]
+    if args.branch:
+        matching_branches = [branch for branch in branches if branch.get('name') == args.branch]
+        if matching_branches:
+            return matching_branches
+
+        print(f"⚠️  Branch '{args.branch}' was not found. Falling back to an empty export target for that branch.")
+        return [{'name': args.branch, 'isMain': False, 'analysisDate': '', 'branch_supported': True}]
+
+    return branches
 
 
 def get_latest_branch_analysis(branch):
+    if branch.get('branch_supported') is False:
+        return {'revision': '', 'date': ''}
+
     branch_name = branch.get('name', '')
     params = {
         'project': PROJECT_KEY,
@@ -221,7 +253,7 @@ def issue_line(issue):
 def get_line_commit_sha(issue, branch_name):
     global line_commit_lookup_disabled
 
-    if line_commit_lookup_disabled:
+    if line_commit_lookup_disabled or not branch_name:
         return ''
 
     component = issue.get('component')
@@ -282,7 +314,10 @@ def enrich_issue(issue, branch, branch_analysis):
     enriched_issue['_export_branch'] = branch_name
     enriched_issue['_analysis_commit_sha'] = branch_analysis.get('revision', '')
     enriched_issue['_analysis_date'] = branch_analysis.get('date', '')
-    enriched_issue['_line_commit_sha'] = get_line_commit_sha(issue, branch_name)
+    if branch.get('branch_supported') is False:
+        enriched_issue['_line_commit_sha'] = ''
+    else:
+        enriched_issue['_line_commit_sha'] = get_line_commit_sha(issue, branch_name)
     return enriched_issue
 
 
@@ -332,6 +367,12 @@ def normalize_issues(issues):
     return [normalize_issue(issue) for issue in issues]
 
 
+def output_columns_for_branches(branches):
+    if all(branch.get('branch_supported') is False for branch in branches):
+        return [column for column in OUTPUT_COLUMNS if column not in BRANCH_METADATA_COLUMNS]
+    return OUTPUT_COLUMNS
+
+
 def get_available_filename(filename):
     if not os.path.exists(filename):
         return filename
@@ -360,13 +401,13 @@ def write_chunk_to_csv(filename, chunk_data, mode='w'):
         - Writes the DataFrame to the specified CSV file.
         - If mode is 'w', includes the header; if 'a', omits the header.
     """
-    df = pd.DataFrame(normalize_issues(chunk_data), columns=OUTPUT_COLUMNS)
+    df = pd.DataFrame(normalize_issues(chunk_data), columns=active_output_columns)
     # For CSV, we can simply append with or without header
     df.to_csv(filename, index=False, mode=mode, header=(mode == 'w'))
 
 # Function to write data in chunks to Excel
 def write_chunk_to_excel(filename, chunk_data, mode='w'):
-    df = pd.DataFrame(normalize_issues(chunk_data), columns=OUTPUT_COLUMNS)
+    df = pd.DataFrame(normalize_issues(chunk_data), columns=active_output_columns)
     if mode == 'w':
         # First chunk: create new file
         df.to_excel(filename, index=False, engine='openpyxl')
@@ -405,39 +446,51 @@ write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_
 
 branches = list_project_branches()
 if not branches:
-    print('No branches found to export.')
+    print('No branches found to export. Falling back to default project issue export without branch/revision metadata.')
+    branches = [branchless_export_target()]
+active_output_columns = output_columns_for_branches(branches)
 
 for branch in branches:
     branch_name = branch.get('name', '')
     branch_analysis = get_latest_branch_analysis(branch)
     current_start_date = start_date
 
-    print(f"Exporting branch '{branch_name}'...")
+    if branch.get('branch_supported') is False:
+        print("Exporting default project issues without branch metadata...")
+    else:
+        print(f"Exporting branch '{branch_name}'...")
 
     while current_start_date < end_date:
         current_end_date = current_start_date + delta
         if current_end_date > end_date:
             current_end_date = end_date
 
-        print(
-            f"Fetching issues for branch '{branch_name}' from "
-            f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
-        )
+        if branch.get('branch_supported') is False:
+            print(
+                f"Fetching default project issues from "
+                f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
+            )
+        else:
+            print(
+                f"Fetching issues for branch '{branch_name}' from "
+                f"{current_start_date.strftime('%Y-%m-%d')} to {current_end_date.strftime('%Y-%m-%d')}..."
+            )
 
         params = { #Adjust as required
             'componentKeys': PROJECT_KEY,
-            'branch': branch_name,
             'createdAfter': current_start_date.strftime('%Y-%m-%d'),
             'createdBefore': current_end_date.strftime('%Y-%m-%d'),
             'ps': page_size,
             'p': 1
         }
+        if branch.get('branch_supported') is not False:
+            params['branch'] = branch_name
 
         while True:
             data = request_json(
                 api_url('/api/issues/search'),
                 params,
-                f"fetch issues for branch '{branch_name}'"
+                f"fetch issues for branch '{branch_name}'" if branch.get('branch_supported') is not False else "fetch default project issues"
             )
             if data is None:
                 break
