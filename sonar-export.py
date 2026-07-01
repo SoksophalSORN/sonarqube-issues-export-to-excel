@@ -63,7 +63,7 @@ def write_chunk_to_excel(filename, chunk_data, mode='w'):
 
 # Fetch issues from SonarQube
 auth = base64.b64encode(f'{TOKEN}:'.encode()).decode()
-headers = {'Authorization': f'Basic {auth}'}
+headers = {"Authorization": f'Bearer {auth}'}
 page_size = 500  # Page size, maximum allowed by SonarQube
 
 # Adjust date ranges as necessary to ensure each range returns less than 10,000 issues
