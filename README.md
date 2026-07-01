@@ -22,10 +22,17 @@ git clone https://github.com/talha2k/sonarqube-issues-export-to-excel.git
 cd sonarqube-issues-export-to-excel
 ```
 
-2. Install the required Python libraries:
+2. Set up python venv
 
 ```bash
-pip install requests pandas openpyxl
+python -m venv .venv # install venv for this project
+source .venv/bin/activate 
+which pip # make sure that it does not use system's pip (/usr/bin/pip)
+```
+
+3. Install the requirements
+```bash
+pip install -r requirements.txt
 ```
 
 ## Configuration
