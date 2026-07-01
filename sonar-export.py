@@ -186,6 +186,11 @@ def get_latest_branch_analysis(branch):
     analyses = data.get('analyses', []) if data else []
     if analyses:
         latest_analysis = analyses[0]
+        if not latest_analysis.get('revision'):
+            print(
+                f"⚠️  Latest analysis for branch '{branch_name}' has no revision. "
+                "The commit_sha column will be empty for this branch."
+            )
         return {
             'revision': latest_analysis.get('revision', ''),
             'date': latest_analysis.get('date', branch.get('analysisDate', '')),
@@ -198,6 +203,7 @@ def get_latest_branch_analysis(branch):
 
 
 line_commit_cache = {}
+line_commit_lookup_disabled = False
 
 
 def issue_line(issue):
@@ -213,6 +219,11 @@ def issue_line(issue):
 
 
 def get_line_commit_sha(issue, branch_name):
+    global line_commit_lookup_disabled
+
+    if line_commit_lookup_disabled:
+        return ''
+
     component = issue.get('component')
     line = issue_line(issue)
     if not component or not line:
@@ -228,11 +239,33 @@ def get_line_commit_sha(issue, branch_name):
         'from': line,
         'to': line,
     }
-    data = request_json(
-        api_url('/api/sources/lines'),
-        params,
-        f"get SCM revision for {component}:{line} on branch '{branch_name}'"
-    )
+    try:
+        response = requests.get(api_url('/api/sources/lines'), headers=headers, params=params, timeout=30)
+        if response.status_code == 403:
+            print(
+                "⚠️  Cannot read source-line SCM data: SonarQube returned HTTP 403. "
+                "The token needs 'See Source Code' permission on the project. "
+                "The line_commit_sha column will be empty."
+            )
+            line_commit_lookup_disabled = True
+            return ''
+        if response.status_code != 200:
+            print(f"❌ Failed to get SCM revision for {component}:{line} on branch '{branch_name}': HTTP {response.status_code}")
+            print('Response content:', response.text)
+            return ''
+        data = response.json()
+    except requests.exceptions.JSONDecodeError as e:
+        print(f"❌ Failed to parse SCM revision JSON for {component}:{line} on branch '{branch_name}': {e}")
+        return ''
+    except requests.exceptions.Timeout:
+        print(f"❌ Timed out while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
+        return ''
+    except requests.exceptions.ConnectionError:
+        print(f"❌ Connection error while getting SCM revision for {component}:{line} on branch '{branch_name}'.")
+        return ''
+    except Exception as e:
+        print(f"❌ Unexpected error while getting SCM revision for {component}:{line} on branch '{branch_name}': {e}")
+        return ''
 
     sources = data.get('sources', []) if data else []
     line_commit_sha = ''
