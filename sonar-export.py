@@ -13,22 +13,61 @@ except ImportError as e:
 
 # SonarQube parameters
 load_dotenv()
+
 SONARQUBE_URL = os.getenv('SONAR_URL', 'http://localhost:9000/api/issues/search') #Sonar Instance URL
 PROJECT_KEY = os.getenv('SONAR_PROJECT_KEY', '') #Your Project Key
 TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
-
-# Add basic input validation
-if not PROJECT_KEY or not TOKEN:
-    print("Error: PROJECT_KEY and TOKEN must be configured")
-    exit(1)
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
 parser.add_argument('--format', type=str, choices=['csv', 'xlsx'], default='xlsx',
                     help='Output format: csv or xlsx (default: xlsx)')
+parser.add_argument('--branch', type=str, default=os.getenv('SONAR_BRANCH', os.getenv('GIT_BRANCH', '')),
+                    help='Source branch name to write into the export metadata column')
+parser.add_argument('--commit-sha', type=str,
+                    default=os.getenv('SONAR_COMMIT_SHA', os.getenv('COMMIT_SHA', os.getenv('GIT_COMMIT', ''))),
+                    help='Source commit SHA to write into the export metadata column')
+parser.add_argument('--analysis-date', type=str, default=os.getenv('SONAR_ANALYSIS_DATE', ''),
+                    help='Analysis date to write into the export metadata column')
+parser.add_argument('--issue-status', type=str, choices=['open', 'fixed'],
+                    help='Export only issues with this issue_status value')
+parser.add_argument('--status', type=str, choices=['open', 'close', 'closed'],
+                    help='Export only issues with this status value')
+parser.add_argument('--minimal', action='store_true',
+                    help='Export only issues where issue_status is OPEN and status is OPEN')
 args = parser.parse_args()
 
+if args.minimal and (args.issue_status or args.status):
+    parser.error('--minimal cannot be used with --issue-status or --status')
+
+# Add basic input validation after argument parsing so --help can run without credentials.
+if not PROJECT_KEY or not TOKEN:
+    parser.error('SONAR_PROJECT_KEY and SONAR_TOKEN must be configured')
+
+EXPORT_ANALYSIS_DATE = args.analysis_date or datetime.now().astimezone().isoformat(timespec='seconds')
+
+ISSUE_STATUS_FILTERS = {
+    'open': 'OPEN',
+    'fixed': 'FIXED',
+}
+
+STATUS_FILTERS = {
+    'open': 'OPEN',
+    'close': 'CLOSED',
+    'closed': 'CLOSED',
+}
+
+if args.minimal:
+    ISSUE_STATUS_FILTER = 'OPEN'
+    STATUS_FILTER = 'OPEN'
+else:
+    ISSUE_STATUS_FILTER = ISSUE_STATUS_FILTERS.get(args.issue_status)
+    STATUS_FILTER = STATUS_FILTERS.get(args.status)
+
 OUTPUT_COLUMNS = [
+    'branch',
+    'commit_sha',
+    'analysis_date',
     'issue_key',
     'rule',
     'severity',
@@ -86,6 +125,14 @@ def file_path_from_component(component):
     return component
 
 
+def should_export_issue(issue):
+    if ISSUE_STATUS_FILTER and issue.get('issueStatus') != ISSUE_STATUS_FILTER:
+        return False
+    if STATUS_FILTER and issue.get('status') != STATUS_FILTER:
+        return False
+    return True
+
+
 def normalize_issue(issue):
     impacts = issue.get('impacts') or []
     impact_severities = sort_severities(
@@ -96,6 +143,9 @@ def normalize_issue(issue):
     ]
 
     return {
+        'branch': args.branch,
+        'commit_sha': args.commit_sha,
+        'analysis_date': EXPORT_ANALYSIS_DATE,
         'issue_key': issue.get('key', ''),
         'rule': issue.get('rule', ''),
         'severity': issue.get('severity', ''),
@@ -170,6 +220,7 @@ output_file = f'sonarqube_issues.{args.format}'
 chunk_size = 5000  # Write to file every 5000 issues
 write_mode = 'w'  # Start with write mode for the first chunk
 total_issues_count = 0
+total_exported_count = 0
 
 # Select the appropriate write function based on format
 write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_excel
@@ -197,8 +248,10 @@ while current_start_date < end_date:
                 try:
                     data = response.json()
                     issues = data.get('issues', [])
-                    all_issues.extend(issues)
+                    filtered_issues = [issue for issue in issues if should_export_issue(issue)]
+                    all_issues.extend(filtered_issues)
                     total_issues_count += len(issues)
+                    total_exported_count += len(filtered_issues)
                     
                     # Write to file in chunks to save memory
                     if len(all_issues) >= chunk_size:
@@ -238,15 +291,16 @@ while current_start_date < end_date:
             break
             
     current_start_date = current_end_date
-    print(f"Found {total_issues_count} issues so far...")
+    print(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
 
 # Handle any remaining issues
 if all_issues:
     print(f"Writing final chunk of {len(all_issues)} issues to {args.format.upper()}...")
     write_function(output_file, all_issues, write_mode)
 
-if total_issues_count > 0:
-    print(f'✅ Export completed: {total_issues_count} issues exported to {output_file}')
+if total_exported_count > 0:
+    print(f'✅ Export completed: {total_exported_count} issues exported to {output_file}')
+    print(f'📥 Total issues fetched before filters: {total_issues_count}')
     print(f'📊 Date range: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}')
 else:
-    print('No issues found.')
+    print('No issues matched the selected export filters.')

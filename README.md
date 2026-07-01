@@ -10,7 +10,7 @@ This Python script fetches issues from a SonarQube project and exports them to C
 ## Prerequisites
 
 - Python 3.x
-- `requests`, `pandas`, `openpyxl` library
+- `requests`, `pandas`, `openpyxl`, `python-dotenv` libraries
 - Access to a SonarQube instance with an appropriate token
 
 ## Installation
@@ -45,6 +45,9 @@ Configure the script using environment variables. The script works with both loc
 export SONAR_URL='http://localhost:9000/api/issues/search'   # Local SonarQube instance
 export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
 export SONAR_TOKEN='your-authentication-token'               # Your authentication token
+export SONAR_BRANCH='main'                                   # Optional export metadata
+export SONAR_COMMIT_SHA='abc123...'                          # Optional export metadata
+export SONAR_ANALYSIS_DATE='2026-07-01T12:00:00+00:00'       # Optional export metadata
 ```
 
 ### For SonarCloud
@@ -53,6 +56,9 @@ export SONAR_TOKEN='your-authentication-token'               # Your authenticati
 export SONAR_URL='https://sonarcloud.io/api/issues/search'   # SonarCloud instance
 export SONAR_PROJECT_KEY='your-project-key'                  # Your project key
 export SONAR_TOKEN='your-authentication-token'               # Your authentication token
+export SONAR_BRANCH='main'                                   # Optional export metadata
+export SONAR_COMMIT_SHA='abc123...'                          # Optional export metadata
+export SONAR_ANALYSIS_DATE='2026-07-01T12:00:00+00:00'       # Optional export metadata
 ```
 
 Alternatively, you can edit these values directly in the script.
@@ -85,6 +91,27 @@ python sonar-export.py --format [csv|xlsx]
 
 - `--format csv`: Export to CSV format (better cross-platform compatibility, smaller file size)
 - `--format xlsx`: Export to Excel format (default, better for viewing in spreadsheet applications)
+- `--branch <name>`: Add the source branch name to each exported row
+- `--commit-sha <sha>`: Add the source commit SHA to each exported row
+- `--analysis-date <date>`: Add the analysis date to each exported row
+- `--issue-status open|fixed`: Export only rows where `issue_status` is `OPEN` or `FIXED`
+- `--status open|close`: Export only rows where `status` is `OPEN` or `CLOSED`
+- `--minimal`: Export only rows where `issue_status` is `OPEN` and `status` is `OPEN`
+
+`--issue-status` and `--status` can be used together in any order. If neither is specified, the script exports every issue returned by SonarQube. `--minimal` must be used by itself and cannot be combined with `--issue-status` or `--status`.
+
+Examples:
+
+```bash
+# Export only currently open actionable issues
+python sonar-export.py --format csv --minimal
+
+# Export fixed issues regardless of the status column
+python sonar-export.py --format csv --issue-status fixed
+
+# Export only rows where both filters match
+python sonar-export.py --format csv --issue-status open --status open
+```
 
 ## Features
 
@@ -107,6 +134,9 @@ python sonar-export.py --format [csv|xlsx]
 The report includes these columns:
 
 ```text
+branch
+commit_sha
+analysis_date
 issue_key
 rule
 severity
