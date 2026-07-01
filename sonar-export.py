@@ -1,3 +1,5 @@
+import sys
+
 try:
     import pandas as pd
     import requests
@@ -9,7 +11,7 @@ try:
 except ImportError as e:
     print(f"Missing required dependency: {e}")
     print("Run: pip install requests pandas openpyxl")
-    exit(1)
+    sys.exit(1)
 
 # SonarQube parameters
 load_dotenv()
@@ -18,8 +20,14 @@ SONARQUBE_URL = os.getenv('SONAR_URL', 'http://localhost:9000/api/issues/search'
 PROJECT_KEY = os.getenv('SONAR_PROJECT_KEY', '') #Your Project Key
 TOKEN = os.getenv('SONAR_TOKEN', '') #Your Project Token
 
+class CiFriendlyArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_usage(sys.stderr)
+        self.exit(1, f'{self.prog}: error: {message}\n')
+
+
 # Parse command-line arguments
-parser = argparse.ArgumentParser(description='Export SonarQube issues to CSV or Excel format')
+parser = CiFriendlyArgumentParser(description='Export SonarQube issues to CSV or Excel format')
 parser.add_argument('-f', '--format', type=str, choices=['csv', 'xlsx'],
                     help='Output format: csv or xlsx (default: csv)')
 parser.add_argument('-o', '--output', type=str,
@@ -468,6 +476,8 @@ chunk_size = 5000  # Write to file every 5000 issues
 write_mode = 'w'  # Start with write mode for the first chunk
 total_issues_count = 0
 total_exported_count = 0
+export_failed = False
+failure_reason = ''
 
 # Select the appropriate write function based on format
 write_function = write_chunk_to_csv if args.format == 'csv' else write_chunk_to_excel
@@ -479,6 +489,9 @@ if not branches:
 active_output_columns = output_columns_for_branches(branches)
 
 for branch in branches:
+    if export_failed:
+        break
+
     branch_name = branch.get('name', '')
     branch_analysis = get_latest_branch_analysis(branch)
     current_start_date = start_date
@@ -489,6 +502,9 @@ for branch in branches:
         log(f"Exporting branch '{branch_name}'...")
 
     while current_start_date < end_date:
+        if export_failed:
+            break
+
         current_end_date = current_start_date + delta
         if current_end_date > end_date:
             current_end_date = end_date
@@ -521,6 +537,12 @@ for branch in branches:
                 f"fetch issues for branch '{branch_name}'" if branch.get('branch_supported') is not False else "fetch default project issues"
             )
             if data is None:
+                export_failed = True
+                failure_reason = (
+                    f"Failed to fetch issues for branch '{branch_name}'"
+                    if branch.get('branch_supported') is not False
+                    else 'Failed to fetch default project issues'
+                )
                 break
 
             issues = data.get('issues', [])
@@ -536,7 +558,13 @@ for branch in branches:
             # Write to file in chunks to save memory
             if len(all_issues) >= chunk_size:
                 log(f"Writing chunk of {len(all_issues)} issues to {args.format.upper()}...")
-                write_function(output_file, all_issues, write_mode)
+                try:
+                    write_function(output_file, all_issues, write_mode)
+                except Exception as e:
+                    export_failed = True
+                    failure_reason = f"Failed to write export file '{output_file}': {e}"
+                    log(f"❌ {failure_reason}")
+                    break
                 all_issues = []  # Clear memory
                 write_mode = 'a'  # Switch to append mode after first write
 
@@ -550,13 +578,23 @@ for branch in branches:
         log(f"Fetched {total_issues_count} issues so far; {total_exported_count} matched export filters...")
 
 # Handle any remaining issues
-if all_issues:
+if not export_failed and all_issues:
     log(f"Writing final chunk of {len(all_issues)} issues to {args.format.upper()}...")
-    write_function(output_file, all_issues, write_mode)
+    try:
+        write_function(output_file, all_issues, write_mode)
+    except Exception as e:
+        export_failed = True
+        failure_reason = f"Failed to write export file '{output_file}': {e}"
+        log(f"❌ {failure_reason}")
 
-if total_exported_count > 0:
+if export_failed:
+    print(f'❌ Export failed: {failure_reason}')
+    sys.exit(1)
+elif total_exported_count > 0:
     print(f'✅ Export completed: {total_exported_count} issues exported to {output_file}')
     print(f'📥 Total issues fetched before filters: {total_issues_count}')
     print(f'📊 Date range: {start_date.strftime("%Y-%m-%d")} to {end_date.strftime("%Y-%m-%d")}')
+    sys.exit(0)
 else:
     print('No issues matched the selected export filters.')
+    sys.exit(0)

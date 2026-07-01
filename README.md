@@ -115,6 +115,8 @@ python sonar-export.py --format [csv|xlsx] --output <filename>
 
 `--issue-status` and `--status` can be used together in any order. If neither is specified, the script exports every issue returned by SonarQube. `--minimal` must be used by itself and cannot be combined with `--issue-status` or `--status`.
 
+For CI jobs, the script exits with code `0` when the export completes successfully, including when no issues match the selected filters. It exits with code `1` for configuration, dependency, fetch, or file-write failures.
+
 Examples:
 
 ```bash
